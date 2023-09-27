@@ -1,0 +1,38 @@
+From 905670721a988fcc5f8ab7d946525e0ad4192bb8 Mon Sep 17 00:00:00 2001
+From: Eric Long <i@hack3r.moe>
+Date: Mon, 22 Aug 2022 02:54:14 +0800
+Subject: [PATCH] Fix build error on riscv64 by linking libatomic
+
+---
+ Makefile.am  | 3 +++
+ configure.ac | 7 ++++---
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index ba6cd48..d64df5d 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -41,6 +41,9 @@ memhog_LDADD = libnuma.la
+ 
+ libnuma_la_SOURCES = libnuma.c syscall.c distance.c affinity.c affinity.h sysfs.c sysfs.h rtnetlink.c rtnetlink.h versions.ldscript
+ libnuma_la_LDFLAGS = -version-info 1:0:0 -Wl,--version-script,$(srcdir)/versions.ldscript -Wl,-init,numa_init -Wl,-fini,numa_fini
++if RISCV64
++libnuma_la_LDFLAGS += -latomic
++endif
+ 
+ check_PROGRAMS = \
+ 	test/distance \
+diff --git a/configure.ac b/configure.ac
+index e3b0eb3..1c34a1e 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -22,6 +22,9 @@
+ AX_CHECK_COMPILE_FLAG([-ftree-vectorize], [tree_vectorize="true"])
+ AM_CONDITIONAL([HAVE_TREE_VECTORIZE], [test x"${tree_vectorize}" = x"true"])
+ 
++AC_CANONICAL_TARGET
++AM_CONDITIONAL([RISCV64], [test x"${target_cpu}" = x"riscv64"])
++
+ AC_CONFIG_FILES([Makefile])
+ 
+ # GCC tries to be "helpful" and only issue a warning for unrecognized
