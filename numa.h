@@ -143,7 +143,7 @@ int numa_preferred(void);
 
 /* Return node size and free memory */
 long long numa_node_size64(int node, long long *freep);
-long long numa_node_size(int node, long long *freep);
+long numa_node_size(int node, long *freep);
 
 int numa_pagesize(void);
 
@@ -172,6 +172,9 @@ void numa_bind(struct bitmask *nodes);
 /* Set the NUMA node interleaving mask. 0 to turn off interleaving */
 void numa_set_interleave_mask(struct bitmask *nodemask);
 
+/* Set the NUMA node weighted interleaving mask. 0 to turn off */
+void numa_set_weighted_interleave_mask(struct bitmask *nodemask);
+
 /* Return the current interleaving mask */
 struct bitmask *numa_get_interleave_mask(void);
 
@@ -186,11 +189,24 @@ static inline void numa_free_nodemask(struct bitmask *b)
 /* Some node to preferably allocate memory from for task. */
 void numa_set_preferred(int node);
 
+/* Returns whether or not the platform supports MPOL_PREFERRED_MANY */
+int numa_has_preferred_many(void);
+
+/* Set of nodes to preferably allocate memory from for task. */
+void numa_set_preferred_many(struct bitmask *bitmask);
+
+/* Return preferred nodes */
+struct bitmask *numa_preferred_many(void);
+
 /* Set local memory allocation policy for task */
 void numa_set_localalloc(void);
 
 /* Only allocate memory from the nodes set in mask. 0 to turn off */
 void numa_set_membind(struct bitmask *nodemask);
+
+/* Only allocate memory from the nodes set in mask. Optimize page
+   placement with Linux kernel NUMA balancing if possible. 0 to turn off */
+void numa_set_membind_balancing(struct bitmask *bmp);
 
 /* Return current membind */
 struct bitmask *numa_get_membind(void);
@@ -221,7 +237,7 @@ void numa_free(void *mem, size_t size);
 /* Low level functions, primarily for shared memory. All memory
    processed by these must not be touched yet */
 
-/* Interleave an memory area. */
+/* Interleave a memory area. */
 void numa_interleave_memory(void *mem, size_t size, struct bitmask *mask);
 
 /* Allocate a memory area on a specific node. */
@@ -327,6 +343,15 @@ struct bitmask *numa_parse_cpustring(const char *);
 /* Convert an ascii list of cpu to a bitmask without current taskset
  * dependency */
 struct bitmask *numa_parse_cpustring_all(const char *);
+
+/* Returns whether or not the system supports setting home_node for mbind
+ * and preferred_many.
+ */
+int numa_has_home_node(void);
+
+/* set the home node for a VMA policy present in the task's address range */
+int numa_set_mempolicy_home_node(void *start, unsigned long len,
+		int home_node, int flags);
 
 /*
  * The following functions are for source code compatibility

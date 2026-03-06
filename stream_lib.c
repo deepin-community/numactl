@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <math.h>
 #include <float.h>
-#include <limits.h>
 #include <sys/time.h>
 #include <stdlib.h>
 #include "stream_lib.h"
@@ -59,7 +58,7 @@ long N = 8000000;
  *
  */
 
-int checktick(void);
+static int checktick(void);
 
 # define HLINE "-------------------------------------------------------------\n"
 
@@ -198,13 +197,12 @@ void stream_test(double *res)
 
 		if (res)
 			res[j] = speed;
-
 	}
 }
 
 # define	M	20
 
-int checktick(void)
+static int checktick(void)
 {
 	int i, minDelta, Delta;
 	double t1, t2, timesfound[M];

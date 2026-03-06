@@ -2,9 +2,8 @@ Source: numactl
 Section: admin
 Priority: optional
 Maintainer: Ian Wienand <ianw@debian.org>
-Uploaders: Al Stone <ahs3@debian.org>
 Standards-Version: 4.5.1
-Build-Depends: debhelper (>= 13)
+Build-Depends: debhelper-compat (= 13)
 Homepage: https://github.com/numactl/numactl
 Vcs-Browser: https://salsa.debian.org/debian/numactl
 Vcs-Git: https://salsa.debian.org/debian/numactl.git
@@ -12,7 +11,7 @@ Vcs-Git: https://salsa.debian.org/debian/numactl.git
 Package: numactl
 Multi-Arch: foreign
 Architecture: linux-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, libnuma1 (>= 2.0.1)
+Depends: ${shlibs:Depends}, ${misc:Depends}, libnuma1
 Description: NUMA scheduling and memory placement tool
  numactl runs processes with a specific NUMA (Non-Uniform Memory
  Architecture) scheduling or memory placement policy.  In addition it

@@ -1,5 +1,5 @@
 AC_PREREQ([2.64])
-AC_INIT([numactl], [2.0.14])
+AC_INIT([numactl], m4_normalize(m4_include([VERSION])))
 
 AC_CONFIG_SRCDIR([numactl.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -14,15 +14,20 @@ LT_INIT
 
 AC_PROG_CC
 
+# Check for enabling LFS support
+AC_SYS_LARGEFILE
+
 # Override CFLAGS so that we can specify custom CFLAGS for numademo.
 AX_AM_OVERRIDE_VAR([CFLAGS])
 
-AX_TLS
+AX_TLS([:],[:])
 
 AX_CHECK_COMPILE_FLAG([-ftree-vectorize], [tree_vectorize="true"])
 AM_CONDITIONAL([HAVE_TREE_VECTORIZE], [test x"${tree_vectorize}" = x"true"])
 
 AC_CONFIG_FILES([Makefile])
+
+AC_SEARCH_LIBS([__atomic_fetch_and_1], [atomic])
 
 # GCC tries to be "helpful" and only issue a warning for unrecognized
 # attributes.  So we compile the test with Werror, so that if the

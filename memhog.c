@@ -15,10 +15,10 @@
    on your Linux system; if not, write to the Free Software Foundation,
    Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA */
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/mman.h>
-#include <sys/fcntl.h>
 #include <string.h>
 #include <stdbool.h>
 #include "numa.h"
@@ -35,11 +35,10 @@ enum {
 #define MADV_NOHUGEPAGE 15
 #endif
 
-int repeat = 1;
 
-void usage(void)
+static void usage(void)
 {
-	printf("memhog [-fFILE] [-rNUM] size[kmg] [policy [nodeset]]\n");
+	printf("memhog [-fFILE] [-rNUM] [-H] size[kmg] [policy [nodeset]]\n");
 	printf("-f mmap is backed by FILE\n");
 	printf("-rNUM repeat memset NUM times\n");
 	printf("-H disable transparent hugepages\n");
@@ -49,7 +48,7 @@ void usage(void)
 
 long length;
 
-void hog(void *map)
+static void hog(void *map)
 {
 	long i;
 	for (i = 0;  i < length; i += UNIT) {
@@ -73,6 +72,7 @@ int main(int ac, char **av)
 	int i;
 	int fd = -1;
 	bool disable_hugepage = false;
+	int repeat = 1;
 
 	nodes = numa_allocate_nodemask();
 	gnodes = numa_allocate_nodemask();
@@ -104,7 +104,10 @@ int main(int ac, char **av)
 	} else
 		loose = 1;
 	policy = parse_policy(av[2], av[3]);
-	if (policy != MPOL_DEFAULT)
+	if (policy == MPOL_MAX)
+		usage();
+
+	if (policy != MPOL_DEFAULT && policy != MPOL_LOCAL)
 		nodes = numa_parse_nodestring(av[3]);
         if (!nodes) {
 		printf ("<%s> is invalid\n", av[3]);
