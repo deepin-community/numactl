@@ -146,3 +146,36 @@ libnuma_1.4 {
   local:
     *;
 } libnuma_1.3;
+
+# New interface for membind with NUMA balancing optimization
+libnuma_1.5 {
+  global:
+    numa_set_membind_balancing;
+  local:
+    *;
+} libnuma_1.4;
+
+
+libnuma_1.6{
+  global:
+    numa_has_preferred_many;
+    numa_set_preferred_many;
+    numa_preferred_many;
+  local:
+    *;
+} libnuma_1.5;
+
+libnuma_1.7{
+  global:
+    numa_has_home_node;
+    numa_set_mempolicy_home_node;
+  local:
+    *;
+} libnuma_1.6;
+
+libnuma_2.1{
+  global:
+    numa_set_weighted_interleave_mask;
+  local:
+    *;
+} libnuma_1.7;

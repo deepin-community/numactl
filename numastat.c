@@ -24,17 +24,12 @@ written by Andi Kleen to display the /sys/devices/system/node/node<N>/numastat
 statistics. In 2012, numastat was rewritten as a C program by Red Hat to
 display per-node memory data for applications and the system in general,
 while also remaining strictly compatible by default with the original numastat.
-A copy of the original numastat perl script is included for reference at the
-end of this file.
 
 */
-
-// Compile with: gcc -O -std=gnu99 -Wall -o numastat numastat.c
 
 #define __USE_MISC
 #include <ctype.h>
 #include <dirent.h>
-#include <errno.h>
 #include <getopt.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -42,6 +37,9 @@ end of this file.
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #define STRINGIZE(s) #s
 #define STRINGIFY(s) STRINGIZE(s)
@@ -51,12 +49,18 @@ end of this file.
 
 #define BUF_SIZE 2048
 #define SMALL_BUF_SIZE 128
+#define PATH_LEN 128
+#define DNAME_LEN 64
 
 // Don't assume nodes are sequential or contiguous.
 // Need to discover and map node numbers.
 
 int *node_ix_map = NULL;
 char **node_header;
+
+//Vma Kernel Pagesize string
+#define VM_PGSZ_STR "kernelpagesize_kB="
+#define VM_PGSZ_STRLEN 18
 
 // Structure to organize memory info from /proc/<PID>/numa_maps for a specific
 // process, or from /sys/devices/system/node/node?/meminfo for system-wide
@@ -71,7 +75,7 @@ typedef struct meminfo {
 #define PROCESS_HUGE_INDEX    0
 #define PROCESS_PRIVATE_INDEX 3
 
-meminfo_t process_meminfo[] = {
+static meminfo_t process_meminfo[] = {
         { PROCESS_HUGE_INDEX,  "huge", "Huge" },
         {        1,            "heap", "Heap" },
         {        2,            "stack", "Stack" },
@@ -80,78 +84,26 @@ meminfo_t process_meminfo[] = {
 
 #define PROCESS_MEMINFO_ROWS (sizeof(process_meminfo) / sizeof(process_meminfo[0]))
 
-meminfo_t numastat_meminfo[] = {
-        { 0, "numa_hit", "Numa_Hit" },
-        { 1, "numa_miss", "Numa_Miss" },
-        { 2, "numa_foreign", "Numa_Foreign" },
-        { 3, "interleave_hit", "Interleave_Hit" },
-        { 4, "local_node", "Local_Node" },
-        { 5, "other_node", "Other_Node" },
-};
-
-#define NUMASTAT_MEMINFO_ROWS (sizeof(numastat_meminfo) / sizeof(numastat_meminfo[0]))
-
-meminfo_t system_meminfo[] = {
-        {  0, "MemTotal", "MemTotal" },
-        {  1, "MemFree", "MemFree" },
-        {  2, "MemUsed", "MemUsed" },
-        {  3, "HighTotal", "HighTotal" },
-        {  4, "HighFree", "HighFree" },
-        {  5, "LowTotal", "LowTotal" },
-        {  6, "LowFree", "LowFree" },
-        {  7, "Active", "Active" },
-        {  8, "Inactive", "Inactive" },
-        {  9, "Active(anon)", "Active(anon)" },
-        { 10, "Inactive(anon)", "Inactive(anon)" },
-        { 11, "Active(file)", "Active(file)" },
-        { 12, "Inactive(file)", "Inactive(file)" },
-        { 13, "Unevictable", "Unevictable" },
-        { 14, "Mlocked", "Mlocked" },
-        { 15, "Dirty", "Dirty" },
-        { 16, "Writeback", "Writeback" },
-        { 17, "FilePages", "FilePages" },
-        { 18, "Mapped", "Mapped" },
-        { 19, "AnonPages", "AnonPages" },
-        { 20, "Shmem", "Shmem" },
-        { 21, "KernelStack", "KernelStack" },
-        { 22, "PageTables", "PageTables" },
-        { 23, "NFS_Unstable", "NFS_Unstable" },
-        { 24, "Bounce", "Bounce" },
-        { 25, "WritebackTmp", "WritebackTmp" },
-        { 26, "Slab", "Slab" },
-        { 27, "SReclaimable", "SReclaimable" },
-        { 28, "SUnreclaim", "SUnreclaim" },
-        { 29, "AnonHugePages", "AnonHugePages" },
-        { 30, "ShmemHugePages", "ShmemHugePages" },
-        { 31, "ShmemPmdMapped", "ShmemPmdMapped" },
-        { 32, "HugePages_Total", "HugePages_Total" },
-        { 33, "HugePages_Free", "HugePages_Free" },
-        { 34, "HugePages_Surp", "HugePages_Surp" },
-        { 35, "KReclaimable", "KReclaimable" }
-};
-
-#define SYSTEM_MEMINFO_ROWS (sizeof(system_meminfo) / sizeof(system_meminfo[0]))
-
-// To allow re-ordering the meminfo memory categories in system_meminfo and
-// numastat_meminfo relative to order in /proc, etc., a simple hash index is
+// To allow re-ordering the /sys/devices/system/node/node<N> meminfo and numastat
+// memory categories relative to order in /sys, etc., a simple hash index is
 // used to look up the meminfo categories. The allocated hash table size must
 // be bigger than necessary to reduce collisions (and because these specific
 // hash algorithms depend on having some unused buckets.
 
 #define HASH_TABLE_SIZE 151
-int hash_collisions = 0;
+static int hash_collisions = 0;
 
 struct hash_entry {
         char *name;
         int index;
 } hash_table[HASH_TABLE_SIZE];
 
-void init_hash_table(void)
+static void init_hash_table(void)
 {
         memset(hash_table, 0, sizeof(hash_table));
 }
 
-int hash_ix(char *s)
+static int hash_ix(char *s)
 {
         unsigned int h = 17;
         while (*s) {
@@ -161,7 +113,7 @@ int hash_ix(char *s)
         return (h % HASH_TABLE_SIZE);
 }
 
-int hash_lookup(char *s)
+static int hash_lookup(char *s)
 {
         int ix = hash_ix(s);
         while (hash_table[ix].name) {	// Assumes big table with blank entries
@@ -176,7 +128,7 @@ int hash_lookup(char *s)
         return -1;
 }
 
-int hash_insert(char *s, int i)
+static int hash_insert(char *s, int i)
 {
         int ix = hash_ix(s);
         while (hash_table[ix].name) {	// assumes no duplicate entries
@@ -250,43 +202,33 @@ typedef struct vtab {
 
 #define USUAL_GUTTER_WIDTH 1
 
-void set_row_flag(vtab_p table, int row, int flag)
+static inline void set_row_flag(vtab_p table, int row, int flag)
 {
         table->row_flags[row] |= (uint8_t)flag;
 }
 
-void set_col_flag(vtab_p table, int col, int flag)
+static inline void set_col_flag(vtab_p table, int col, int flag)
 {
         table->col_flags[col] |= (uint8_t)flag;
 }
 
-void clear_row_flag(vtab_p table, int row, int flag)
-{
-        table->row_flags[row] &= (uint8_t)~flag;
-}
-
-void clear_col_flag(vtab_p table, int col, int flag)
-{
-        table->col_flags[col] &= (uint8_t)~flag;
-}
-
-int test_row_flag(vtab_p table, int row, int flag)
+static inline int test_row_flag(vtab_p table, int row, int flag)
 {
         return ((table->row_flags[row] & (uint8_t)flag) != 0);
 }
 
-int test_col_flag(vtab_p table, int col, int flag)
+static inline int test_col_flag(vtab_p table, int col, int flag)
 {
         return ((table->col_flags[col] & (uint8_t)flag) != 0);
 }
 
-void set_col_justification(vtab_p table, int col, int justify)
+static inline void set_col_justification(vtab_p table, int col, int justify)
 {
         table->col_flags[col] &= (uint8_t)~COL_JUSTIFY_MASK;
         table->col_flags[col] |= (uint8_t)(justify & COL_JUSTIFY_MASK);
 }
 
-void set_col_width(vtab_p table, int col, uint8_t width)
+static inline void set_col_width(vtab_p table, int col, uint8_t width)
 {
         if (width >= SMALL_BUF_SIZE) {
                 width = SMALL_BUF_SIZE - 1;
@@ -294,78 +236,46 @@ void set_col_width(vtab_p table, int col, uint8_t width)
         table->col_width[col] = width;
 }
 
-void set_col_decimal_places(vtab_p table, int col, uint8_t places)
+static inline void set_col_decimal_places(vtab_p table, int col, uint8_t places)
 {
         table->col_decimal_places[col] = places;
 }
 
-void set_cell_flag(vtab_p table, int row, int col, int flag)
+static inline void set_cell_flag(vtab_p table, int row, int col, int flag)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         c_ptr->flags |= (uint32_t)flag;
 }
 
-void clear_cell_flag(vtab_p table, int row, int col, int flag)
-{
-        cell_p c_ptr = GET_CELL_PTR(row, col);
-        c_ptr->flags &= (uint32_t)~flag;
-}
-
-int test_cell_flag(vtab_p table, int row, int col, int flag)
-{
-        cell_p c_ptr = GET_CELL_PTR(row, col);
-        return ((c_ptr->flags & (uint32_t)flag) != 0);
-}
-
-void string_assign(vtab_p table, int row, int col, char *s)
+static inline void string_assign(vtab_p table, int row, int col, char *s)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         c_ptr->type = CELL_TYPE_STRING;
         c_ptr->s = s;
 }
 
-void repchar_assign(vtab_p table, int row, int col, char c)
+static inline void repchar_assign(vtab_p table, int row, int col, char c)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         c_ptr->type = CELL_TYPE_REPCHAR;
         c_ptr->c[0] = c;
 }
 
-void double_assign(vtab_p table, int row, int col, double d)
+static inline void double_assign(vtab_p table, int row, int col, double d)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         c_ptr->type = CELL_TYPE_DOUBLE;
         c_ptr->d = d;
 }
 
-void long_assign(vtab_p table, int row, int col, int64_t l)
-{
-        cell_p c_ptr = GET_CELL_PTR(row, col);
-        c_ptr->type = CELL_TYPE_LONG;
-        c_ptr->l = l;
-}
-
-void double_addto(vtab_p table, int row, int col, double d)
+static inline void double_addto(vtab_p table, int row, int col, double d)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         c_ptr->type = CELL_TYPE_DOUBLE;
         c_ptr->d += d;
 }
 
-void long_addto(vtab_p table, int row, int col, int64_t l)
-{
-        cell_p c_ptr = GET_CELL_PTR(row, col);
-        c_ptr->type = CELL_TYPE_LONG;
-        c_ptr->l += l;
-}
-
-void clear_assign(vtab_p table, int row, int col)
-{
-        cell_p c_ptr = GET_CELL_PTR(row, col);
-        memset(c_ptr, 0, sizeof(cell_t));
-}
-
-void zero_table_data(vtab_p table, int type)
+static void zero_table_data(vtab_p table, int type)
 {
         // Sets data area of table to zeros of specified type
         for (int row = table->header_rows; (row < ALL_TABLE_ROWS); row++) {
@@ -377,7 +287,7 @@ void zero_table_data(vtab_p table, int type)
         }
 }
 
-void sort_rows_descending_by_col(vtab_p table, int start_row, int stop_row, int col)
+static void sort_rows_descending_by_col(vtab_p table, int start_row, int stop_row, int col)
 {
         // Rearrange row_ix_map[] indices so the rows will be in
         // descending order by the value in the specified column
@@ -399,12 +309,7 @@ void sort_rows_descending_by_col(vtab_p table, int start_row, int stop_row, int 
         }
 }
 
-void span(vtab_p table, int first_row, int first_col, int last_row, int last_col)
-{
-        // FIXME: implement row / col spannnig someday?
-}
-
-void init_table(vtab_p table, int header_rows, int header_cols, int data_rows, int data_cols)
+static void init_table(vtab_p table, int header_rows, int header_cols, int data_rows, int data_cols)
 {
         // init table sizes
         table->header_rows = header_rows;
@@ -463,7 +368,7 @@ void init_table(vtab_p table, int header_rows, int header_cols, int data_rows, i
         memset(table->col_decimal_places, 0, alloc_size);
 }
 
-void free_cell(vtab_p table, int row, int col)
+static void free_cell(vtab_p table, int row, int col)
 {
         cell_p c_ptr = GET_CELL_PTR(row, col);
         if ((c_ptr->type == CELL_TYPE_STRING)
@@ -474,7 +379,7 @@ void free_cell(vtab_p table, int row, int col)
         memset(c_ptr, 0, sizeof(cell_t));
 }
 
-void free_table(vtab_p table)
+static void free_table(vtab_p table)
 {
         if (table->cell != NULL) {
                 for (int row = 0; (row < ALL_TABLE_ROWS); row++) {
@@ -501,7 +406,7 @@ void free_table(vtab_p table)
         }
 }
 
-char *fmt_cell_data(cell_p c_ptr, int max_width, int decimal_places)
+static char *fmt_cell_data(cell_p c_ptr, int max_width, int decimal_places)
 {
         // Returns pointer to a static buffer, expecting caller to
         // immediately use or copy the contents before calling again.
@@ -536,7 +441,7 @@ char *fmt_cell_data(cell_p c_ptr, int max_width, int decimal_places)
         return buf;
 }
 
-void auto_set_col_width(vtab_p table, int col, int min_width, int max_width)
+static void auto_set_col_width(vtab_p table, int col, int min_width, int max_width)
 {
         int width = min_width;
         for (int row = 0; (row < ALL_TABLE_ROWS); row++) {
@@ -557,7 +462,7 @@ void auto_set_col_width(vtab_p table, int col, int min_width, int max_width)
         table->col_width[col] = (uint8_t)width;
 }
 
-void display_justified_cell(cell_p c_ptr, int row_flags, int col_flags, int width, int decimal_places)
+static void display_justified_cell(cell_p c_ptr, int row_flags, int col_flags, int width, int decimal_places)
 {
         char *p = fmt_cell_data(c_ptr, width, decimal_places);
         int l = strlen(p);
@@ -585,7 +490,7 @@ void display_justified_cell(cell_p c_ptr, int row_flags, int col_flags, int widt
         printf("%s", buf);
 }
 
-void display_table(vtab_p table,
+static void display_table(vtab_p table,
                    int screen_width,
                    int show_unseen_rows,
                    int show_unseen_cols,
@@ -693,29 +598,28 @@ void display_table(vtab_p table,
         }
 }
 
-int verbose = 0;
-int num_pids = 0;
-int num_nodes = 0;
-int screen_width = 0;
-int show_zero_data = 1;
-int compress_display = 0;
-int sort_table = 0;
-int sort_table_node = -1;
-int compatibility_mode = 0;
-int pid_array_max_pids = 0;
-int *pid_array = NULL;
-char *prog_name = NULL;
-double page_size_in_bytes = 0;
-double huge_page_size_in_bytes = 0;
+static int verbose = 0;
+static int num_pids = 0;
+static int num_nodes = 0;
+static int screen_width = 0;
+static int show_zero_data = 1;
+static int compress_display = 0;
+static int sort_table = 0;
+static int sort_table_node = -1;
+static int compatibility_mode = 0;
+static int pid_array_max_pids = 0;
+static int *pid_array = NULL;
+static char *prog_name = NULL;
+static double page_size_in_bytes = 0;
+static double huge_page_size_in_bytes = 0;
 
-void display_version_and_exit(void)
+static void display_version_and_exit(void)
 {
-        char *version_string = "20130723";
-        printf("%s version: %s: %s\n", prog_name, version_string, __DATE__);
+        printf("%s version: %s: %s\n", prog_name, VERSION, __DATE__);
         exit(EXIT_SUCCESS);
 }
 
-void display_usage_and_exit(void)
+static void display_usage_and_exit(void)
 {
         fprintf(stderr, "Usage: %s [-c] [-m] [-n] [-p <PID>|<pattern>] [-s[<node>]] [-v] [-V] [-z] [ <PID>|<pattern>... ]\n", prog_name);
         fprintf(stderr, "-c to minimize column widths\n");
@@ -729,7 +633,7 @@ void display_usage_and_exit(void)
         exit(EXIT_FAILURE);
 }
 
-int get_screen_width(void)
+static int get_screen_width(void)
 {
         int width = 80;
         char *p = getenv("NUMASTAT_WIDTH");
@@ -762,7 +666,7 @@ int get_screen_width(void)
         return width;
 }
 
-char *command_name_for_pid(int pid)
+static char *command_name_for_pid(int pid)
 {
         // Get the PID command name field from /proc/PID/status file.  Return
         // pointer to a static buffer, expecting caller to immediately copy result.
@@ -791,8 +695,107 @@ char *command_name_for_pid(int pid)
         return NULL;
 }
 
-void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows, int tok_offset)
+/* update hugepages info from /sys/devices/system/node/node$/hugepages/hugepages-$ */
+static double update_hugepages_info(int node_ix, const char *token)
 {
+        char *fname;
+        DIR *d = NULL;
+        struct dirent *dp = NULL;
+        struct stat st;
+        char top_path[64];
+
+        if (!strncmp(token, "HugePages_Total", 15)) {
+                fname = "nr_hugepages";
+        } else if(!strncmp(token, "HugePages_Free", 14)) {
+                fname = "free_hugepages";
+        } else if (!strncmp(token, "HugePages_Surp", 14)) {
+                fname = "surplus_hugepages";
+        } else {
+                return -EINVAL;
+        }
+
+        snprintf(top_path, sizeof(top_path), "/sys/devices/system/node/node%d/hugepages", node_ix);
+
+        if(stat(top_path, &st) < 0 || !S_ISDIR(st.st_mode)) {
+                printf("invalid path: %s\n", top_path);
+                return -ENOENT;
+        }
+
+        if(!(d = opendir(top_path))) {
+                fprintf(stderr, "opendir[%s] error: %s\n", top_path, strerror(errno));
+                return -ENOENT;
+        }
+
+        const char *delimiters = "-";
+        double total = 0;
+        char *huge_dname;
+        char *fpath;
+        char *buf;
+
+        huge_dname = (char *)malloc(DNAME_LEN);
+        fpath = (char *)malloc(PATH_LEN);
+        buf = (char *)malloc(SMALL_BUF_SIZE);
+
+        /* Traversing directories /sys/devices/system/node/node%d/hugepages */
+        while((dp = readdir(d)) != NULL) {
+                if((!strncmp(dp->d_name, ".", 1)) || (!strncmp(dp->d_name, "..", 2)))
+                        continue;
+
+                if ((dp->d_type != DT_DIR) || strncmp(dp->d_name, "hugepages-", 10))
+                        continue;
+
+                /* Get huge pages size from d_name d_name: example hugepages-1048576kB */
+                memset(huge_dname, 0, DNAME_LEN);
+                memcpy(huge_dname, dp->d_name, strlen(dp->d_name));
+
+                /* Example: /sys/devices/system/node/node%d/hugepages/hugepages-1048576kB/nr_hugepages */
+                snprintf(fpath, PATH_LEN, "%s/%s/%s", top_path, huge_dname, fname);
+
+                char *pagesz_str = strtok(huge_dname, delimiters);
+                pagesz_str = strtok(NULL, pagesz_str);
+                memset(strstr(pagesz_str, "kB"), 0, 2);
+                unsigned long hugepage_size = strtol(pagesz_str, NULL, 10);
+                hugepage_size *= KILOBYTE;
+
+                /* Get the number of pages */
+                FILE *fs = fopen(fpath, "r");
+                if (!fs) {
+                        printf("cannot open %s: %s\n", fpath, strerror(errno));
+                        continue;
+                }
+                unsigned long nr_pages = 0;
+                if (fgets(buf, SMALL_BUF_SIZE, fs))
+                    nr_pages = strtoul(buf, NULL, 10);
+                fclose(fs);
+
+                total += nr_pages * hugepage_size;
+        }
+        closedir(d);
+        free(huge_dname);
+        free(fpath);
+        free(buf);
+
+        return total;
+}
+
+static void show_info_from_system_file(char *file, int tok_offset)
+{
+        char fname[64];
+        char buf[SMALL_BUF_SIZE];
+        // Open /sys/.../node0/<file>
+        snprintf(fname, sizeof(fname), "/sys/devices/system/node/node0/%s", file);
+        FILE *fs = fopen(fname, "r");
+        if (!fs) {
+                sprintf(buf, "cannot open %s", fname);
+                perror(buf);
+                exit(EXIT_FAILURE);
+        }
+        // and count the lines in the file
+        int meminfo_rows = 0;
+        while (fgets(buf, SMALL_BUF_SIZE, fs)) {
+                meminfo_rows += 1;
+        }
+        fclose(fs);
         // Setup and init table
         vtab_t table;
         int header_rows = 2 - compatibility_mode;
@@ -800,24 +803,17 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
         // Add an extra data column for a total column
         init_table(&table, header_rows, header_cols, meminfo_rows, num_nodes + 1);
         int total_col_ix = header_cols + num_nodes;
-        // Insert token mapping in hash table and assign left header column label for each row in table
         init_hash_table();
-        for (int row = 0; (row < meminfo_rows); row++) {
-                hash_insert(meminfo[row].token, meminfo[row].index);
-                if (compatibility_mode) {
-                        string_assign(&table, (header_rows + row), 0, meminfo[row].token);
-                } else {
-                        string_assign(&table, (header_rows + row), 0, meminfo[row].label);
-                }
-        }
-        // printf("There are %d table hash collisions.\n", hash_collisions);
         // Set left header column width and left justify it
         set_col_width(&table, 0, 16);
         set_col_justification(&table, 0, COL_JUSTIFY_LEFT);
         // Open /sys/devices/system/node/node?/<file> for each node and store data
         // in table.  If not compatibility_mode, do approximately first third of
         // this loop also for (node_ix == num_nodes) to get "Total" column header.
+        // Also, during the first iteration, insert token mapping in hash table
+        // and assign left header column label for each row in table.
         for (int node_ix = 0; (node_ix < (num_nodes + (1 - compatibility_mode))); node_ix++) {
+                int row = 0;
                 int col = header_cols + node_ix;
                 // Assign header row label and horizontal line for this column...
                 string_assign(&table, 0, col, node_header[node_ix]);
@@ -835,9 +831,7 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
                 if (node_ix == num_nodes) {
                         break;
                 }
-                // Open /sys/.../node<N>/numstast file for this node...
-                char buf[SMALL_BUF_SIZE];
-                char fname[64];
+                // Open /sys/.../node<N>/<file> for this node...
                 snprintf(fname, sizeof(fname), "/sys/devices/system/node/node%d/%s", node_ix_map[node_ix], file);
                 FILE *fs = fopen(fname, "r");
                 if (!fs) {
@@ -860,6 +854,34 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
                         }
                         // example line from numastat file: "numa_miss 16463"
                         // example line from meminfo  file: "Node 3 Inactive:  210680 kB"
+                        if (node_ix == 0) {
+                                char *token = strdup(tok[0 + tok_offset]);
+                                if (token == NULL) {
+                                        perror("malloc failed line: " STRINGIFY(__LINE__));
+                                        exit(EXIT_FAILURE);
+                                }
+                                hash_insert(token, row);
+                                // printf("There are %d table hash collisions.\n", hash_collisions);
+                                if ((compatibility_mode) || (!strncmp("meminfo", file, 7))) {
+                                        string_assign(&table, (header_rows + row), 0, token);
+                                } else {
+                                        char *label = strdup(tok[0 + tok_offset]);
+                                        if (label == NULL) {
+                                                perror("malloc failed line: " STRINGIFY(__LINE__));
+                                                exit(EXIT_FAILURE);
+                                        }
+                                        // Capitalize first letter and letters after '_'
+                                        char *p = label;
+                                        while (p) {
+                                                p[0] = toupper(p[0]);
+                                                p = strchr(p, '_');
+                                                if (p) {
+                                                        p += 1;
+                                                }
+                                        }
+                                        string_assign(&table, (header_rows + row), 0, label);
+                                }
+                        }
                         int index = hash_lookup(tok[0 + tok_offset]);
                         if (index < 0) {
                                 printf("Token %s not in hash table.\n", tok[0 + tok_offset]);
@@ -870,7 +892,14 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
                                         if (tokens < 4) {
                                                 multiplier = page_size_in_bytes;
                                         } else if (!strncmp("HugePages", tok[2], 9)) {
-                                                multiplier = huge_page_size_in_bytes;
+                                                /* update hugepages info more detail from sysfs/hugepages directory */
+                                                double new = update_hugepages_info(node_ix_map[node_ix], tok[2]);
+                                                if (new > 0) {
+                                                        value = new;
+                                                } else {
+                                                        /* fall back old way */
+                                                        multiplier = huge_page_size_in_bytes;
+                                                }
                                         } else if (!strncmp("kB", tok[4], 2)) {
                                                 multiplier = KILOBYTE;
                                         }
@@ -880,10 +909,11 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
                                 double_assign(&table, header_rows + index, col, value);
                                 double_addto(&table, header_rows + index, total_col_ix, value);
                         }
+                        row += 1;
                 }
                 fclose(fs);
         }
-        // Crompress display column widths, if requested
+        // Compress display column widths, if requested
         if (compress_display) {
                 for (int col = 0; (col < header_cols + num_nodes + 1); col++) {
                         auto_set_col_width(&table, col, 4, 16);
@@ -904,21 +934,21 @@ void show_info_from_system_file(char *file, meminfo_p meminfo, int meminfo_rows,
         free_table(&table);
 }
 
-void show_numastat_info(void)
+static void show_numastat_info(void)
 {
         if (!compatibility_mode) {
                 printf("\nPer-node numastat info (in MBs):\n");
         }
-        show_info_from_system_file("numastat", numastat_meminfo, NUMASTAT_MEMINFO_ROWS, 0);
+        show_info_from_system_file("numastat", 0);
 }
 
-void show_system_info(void)
+static void show_system_info(void)
 {
         printf("\nPer-node system memory usage (in MBs):\n");
-        show_info_from_system_file("meminfo", system_meminfo, SYSTEM_MEMINFO_ROWS, 2);
+        show_info_from_system_file("meminfo", 2);
 }
 
-void show_process_info(void)
+static void show_process_info(void)
 {
         vtab_t table;
         int header_rows = 2;
@@ -1003,6 +1033,12 @@ void show_process_info(void)
                 // amount.
                 while (fgets(buf, BUF_SIZE, fs)) {
                         int category = PROCESS_PRIVATE_INDEX;	// init category to the catch-all...
+                        double vm_pagesz = 0;
+                        char *pagesz_str = strstr(buf, VM_PGSZ_STR);
+                        if (pagesz_str) {
+                                vm_pagesz = (double)strtol(&pagesz_str[VM_PGSZ_STRLEN], NULL, 10);
+                                vm_pagesz *= KILOBYTE;
+                        }
                         const char *delimiters = " \t\r\n";
                         char *p = strtok(buf, delimiters);
                         while (p) {
@@ -1027,11 +1063,13 @@ void show_process_info(void)
                                                 exit(EXIT_FAILURE);
                                         }
                                         double value = (double)strtol(&p[1], &p, 10);
-                                        double multiplier = page_size_in_bytes;
-                                        if (category == PROCESS_HUGE_INDEX) {
-                                                multiplier = huge_page_size_in_bytes;
+                                        if (!vm_pagesz) {
+                                                vm_pagesz = page_size_in_bytes;
+                                                if (category == PROCESS_HUGE_INDEX) {
+                                                        vm_pagesz = huge_page_size_in_bytes;
+                                                }
                                         }
-                                        value *= multiplier;
+                                        value *= vm_pagesz;
                                         value /= (double)MEGABYTE;
                                         // Add value to data cell, total_col, and total_row
                                         int tmp_row;
@@ -1069,7 +1107,7 @@ void show_process_info(void)
                 // If showing individual tables, or we just added the last total line,
                 // prepare the table for display and display it...
                 if ((show_sub_categories) || (pid_ix + 1 == num_pids)) {
-                        // Crompress display column widths, if requested
+                        // Compress display column widths, if requested
                         if (compress_display) {
                                 for (int col = 0; (col < header_cols + num_nodes + 1); col++) {
                                         auto_set_col_width(&table, col, 4, 16);
@@ -1115,7 +1153,7 @@ int node_and_digits(const struct dirent *dptr)
         return 1;
 }
 
-void init_node_ix_map_and_header(int compatibility_mode)
+static void init_node_ix_map_and_header(void)
 {
         // Count directory names of the form: /sys/devices/system/node/node<N>
         struct dirent **namelist;
@@ -1180,7 +1218,7 @@ void init_node_ix_map_and_header(int compatibility_mode)
         }
 }
 
-void free_node_ix_map_and_header(void)
+static void free_node_ix_map_and_header(void)
 {
         if (node_ix_map != NULL) {
                 free(node_ix_map);
@@ -1195,9 +1233,9 @@ void free_node_ix_map_and_header(void)
         }
 }
 
-double get_huge_page_size_in_bytes(void)
+static double get_huge_page_size_in_bytes(void)
 {
-        double huge_page_size = 0;;
+        double huge_page_size = 0;
         FILE *fs = fopen("/proc/meminfo", "r");
         if (!fs) {
                 perror("Can't open /proc/meminfo");
@@ -1218,7 +1256,7 @@ double get_huge_page_size_in_bytes(void)
         return huge_page_size * KILOBYTE;
 }
 
-int all_digits(char *p)
+static int all_digits(char *p)
 {
         if (p == NULL) {
                 return 0;
@@ -1229,12 +1267,12 @@ int all_digits(char *p)
         return 1;
 }
 
-int starts_with_digit(const struct dirent *dptr)
+static int starts_with_digit(const struct dirent *dptr)
 {
         return (isdigit(dptr->d_name[0]));
 }
 
-void add_pid_to_list(int pid)
+static void add_pid_to_list(int pid)
 {
         if (num_pids < pid_array_max_pids) {
                 pid_array[num_pids++] = pid;
@@ -1260,7 +1298,7 @@ int ascending(const void *p1, const void *p2)
         return *(int *)p1 - *(int *) p2;
 }
 
-void sort_pids_and_remove_duplicates(void)
+static void sort_pids_and_remove_duplicates(void)
 {
         if (num_pids > 1) {
                 qsort(pid_array, num_pids, sizeof(int), ascending);
@@ -1278,7 +1316,7 @@ void sort_pids_and_remove_duplicates(void)
         }
 }
 
-void add_pids_from_pattern_search(char *pattern)
+static void add_pids_from_pattern_search(char *pattern)
 {
         // Search all /proc/<PID>/cmdline files and /proc/<PID>/status:Name fields
         // for matching patterns.  Show the memory details for matching PIDs.
@@ -1404,10 +1442,9 @@ int main(int argc, char **argv)
                 optind += 1;
         }
         // If there are no program options or arguments, be extremely compatible
-        // with the old numastat perl script (which is included at the end of this
-        // file for reference)
+        // with the old numastat perl script
         compatibility_mode = (argc == 1);
-        init_node_ix_map_and_header(compatibility_mode);	// enumarate the NUMA nodes
+        init_node_ix_map_and_header();	// enumarate the NUMA nodes
         if (compatibility_mode) {
                 show_numastat_info();
                 free_node_ix_map_and_header();
@@ -1435,101 +1472,3 @@ int main(int argc, char **argv)
         free_node_ix_map_and_header();
         exit(EXIT_SUCCESS);
 }
-
-#if 0
-/*
-
-#!/usr/bin/perl
-# Print numa statistics for all nodes
-# Copyright (C) 2003,2004 Andi Kleen, SuSE Labs.
-#
-# numastat is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public
-# License as published by the Free Software Foundation; version
-# 2.
-#
-# numastat is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# General Public License for more details.
-
-# You should find a copy of v2 of the GNU General Public License somewhere
-# on your Linux system; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
-#
-# Example: NUMASTAT_WIDTH=80 watch -n1 numastat
-#
-
-# output width
-$WIDTH=80;
-if (defined($ENV{'NUMASTAT_WIDTH'})) {
-	$WIDTH=$ENV{'NUMASTAT_WIDTH'};
-} else {
-	use POSIX;
-	if (POSIX::isatty(fileno(STDOUT))) {
-		if (open(R, "resize |")) {
-			while (<R>) {
-				$WIDTH=$1 if /COLUMNS=(\d+)/;
-			}
-			close R;
-		}
-	} else {
-		# don't split it up for easier parsing
-		$WIDTH=10000000;
-	}
-}
-$WIDTH = 32 if $WIDTH < 32;
-
-if (! -d "/sys/devices/system/node" ) {
-	print STDERR "sysfs not mounted or system not NUMA aware\n";
-	exit 1;
-}
-
-%stat = ();
-$title = "";
-$mode = 0;
-opendir(NODES, "/sys/devices/system/node") || exit 1;
-foreach $nd (readdir(NODES)) {
-	next unless $nd =~ /node(\d+)/;
-	# On newer kernels, readdir may enumerate the 'node(\d+) subdirs
-	# in opposite order from older kernels--e.g., node{0,1,2,...}
-	# as opposed to node{N,N-1,N-2,...}.  Accomodate this by
-	# switching to new mode so that the stats get emitted in
-	# the same order.
-        #print "readdir(NODES) returns $nd\n";
-	if (!$title && $nd =~ /node0/) {
-		$mode = 1;
-	}
-	open(STAT, "/sys/devices/system/node/$nd/numastat") ||
-			die "cannot open $nd: $!\n";
-	if (! $mode) {
-		$title = sprintf("%16s",$nd) . $title;
-	} else {
-		$title = $title . sprintf("%16s",$nd);
-	}
-	@fields = ();
-	while (<STAT>) {
-		($name, $val) = split;
-		if (! $mode) {
-			$stat{$name} = sprintf("%16u", $val) . $stat{$name};
-		} else {
-			$stat{$name} = $stat{$name} . sprintf("%16u", $val);
-		}
-		push(@fields, $name);
-	}
-	close STAT;
-}
-closedir NODES;
-
-$numfields = int(($WIDTH - 16) / 16);
-$l = 16 * $numfields;
-for ($i = 0; $i < length($title); $i += $l) {
-	print "\n" if $i > 0;
-	printf "%16s%s\n","",substr($title,$i,$l);
-	foreach (@fields) {
-		printf "%-16s%s\n",$_,substr($stat{$_},$i,$l);
-	}
-}
-
-*/
-#endif

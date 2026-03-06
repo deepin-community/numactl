@@ -1,6 +1,6 @@
 # numactl
 
-[![Build Status](https://travis-ci.org/numactl/numactl.svg?branch=master)](https://travis-ci.org/numactl/numactl)
+![build test](https://github.com/numactl/numactl/workflows/Makefile%20CI/badge.svg)
 
 Simple NUMA policy support. It consists of a numactl program to run other
 programs with a specific NUMA policy and a libnuma shared library ("NUMA API")
@@ -15,8 +15,8 @@ display NUMA allocation statistics and `memhog`.
 
 In `test/` there is a small regression test suite.
 
-Note that `regress` assumes a unloaded machine with memory free on each node.
-Otherwise you will get spurious failures in the non-strict policies (prefered,
+Note that `regress` assumes an unloaded machine with memory free on each node.
+Otherwise you will get spurious failures in the non-strict policies (preferred,
 interleave.)
 
 See the manpages [`numactl.8`](https://linux.die.net/man/8/numactl) and
@@ -45,4 +45,6 @@ Andi Kleen, SUSE Labs
 
 Version 2.0.0 by Cliff Wickman (`cpw@sgi.com`), Christoph Lameter
 (`clameter@sgi.com`) and Lee Schermerhorn (`lee.schermerhorn@hp.com`).
+
+Version 2.0.16+ by Andi Kleen and Luo Chunsheng, as well as various contributors.
 

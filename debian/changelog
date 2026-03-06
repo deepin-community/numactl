@@ -1,8 +1,50 @@
-numactl (2.0.14-3deepin1) unstable; urgency=medium
+numactl (2.0.19-1) unstable; urgency=medium
 
-  * Fix RISC-V build by a patch from upstream
+  * New upstream version 2.0.19
 
- -- Chang Yang <yangchang@deepin.org>  Wed, 27 Sep 2023 14:02:01 +0800
+ -- Ian Wienand <ianw@debian.org>  Wed, 23 Apr 2025 08:40:12 +1000
+
+numactl (2.0.18-1) unstable; urgency=medium
+
+  * New upstream version 2.0.18 (Closes: #1063402)
+  * Update symbols for upstream 5b790bdaae6b733759399908e9ccf1f2677a0443
+  * Remove man page macro fix
+
+ -- Ian Wienand <ianw@debian.org>  Thu, 08 Feb 2024 08:46:18 +1100
+
+numactl (2.0.17-2) unstable; urgency=medium
+
+  * debian/patches/series : add trailing newline (lintian)
+
+ -- Ian Wienand <ianw@debian.org>  Tue, 06 Feb 2024 21:17:09 +1100
+
+numactl (2.0.17-1) unstable; urgency=medium
+
+  * New upstream version 2.0.17
+  * Remove debian release from symbols
+  * Fix man page lintian warnings
+
+ -- Ian Wienand <ianw@debian.org>  Tue, 06 Feb 2024 19:56:47 +1100
+
+numactl (2.0.16-1) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Set debhelper-compat version in Build-Depends.
+  * Set upstream metadata fields: Repository-Browse.
+  * Remove constraints unnecessary since buster (oldstable):
+    + numactl: Drop versioned constraint on libnuma1 in Depends.
+
+  [ Ian Wienand ]
+  * New upstream version 2.0.16
+
+ -- Ian Wienand <ianw@debian.org>  Tue, 27 Dec 2022 10:30:33 +1100
+
+numactl (2.0.15-1) unstable; urgency=medium
+
+  * New upstream version 2.0.15
+  * Update symbols for 2.0.15
+
+ -- Ian Wienand <ianw@debian.org>  Thu, 08 Sep 2022 13:48:33 +1000
 
 numactl (2.0.14-3) unstable; urgency=medium
 
