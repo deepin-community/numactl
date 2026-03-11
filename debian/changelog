@@ -1,3 +1,9 @@
+numactl (2.0.19-1deepin1) unstable; urgency=medium
+
+  * Fix RISC-V build by a patch from upstream
+
+ -- tunaichao <tunaichao@uniontech.com>  Wed, 11 Mar 2026 16:21:51 +0800
+
 numactl (2.0.19-1) unstable; urgency=medium
 
   * New upstream version 2.0.19
